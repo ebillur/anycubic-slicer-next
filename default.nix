@@ -375,6 +375,9 @@ stdenv.mkDerivation (finalAttrs: {
       --replace-fail 'm_textctrl->SetLabel(wxString::Format' 'm_textctrl->ChangeValue(wxString::Format'
     sed -i '0,/    temp->SetLabel(_L(m_opt.sidetext));/s|    temp->SetLabel(_L(m_opt.sidetext));|    if (m_opt.multiline) static_cast<wxTextCtrl*>(temp)->SetHint(_L(m_opt.sidetext)); else temp->SetLabel(_L(m_opt.sidetext));|' \
       src/slic3r/GUI/Field.cpp
+    substituteInPlace src/slic3r/GUI/Widgets/DropDown.cpp \
+      --replace-fail 'gtk_window_resize (GTK_WINDOW (m_widget), szContent.x, szContent.y);' \
+                     'if (szContent.x > 0 && szContent.y > 0) gtk_window_resize (GTK_WINDOW (m_widget), szContent.x, szContent.y);'
     # wxGTK asserts if a static bitmap is measured before it receives a real
     # bitmap. The device status panel creates these controls before printer
     # status arrives, so seed them with their normal/offline artwork.
@@ -406,6 +409,56 @@ stdenv.mkDerivation (finalAttrs: {
                      'm_dev_upgrade_indicator = new wxStaticBitmap(this, wxID_ANY, ScalableBitmap(this, "monitor_upgrade_online", 5).bmp(), wxDefaultPosition, wxSize(FromDIP(5), FromDIP(5)));'
     sed -i '/m_dev_upgrade_indicator->SetBitmap(ScalableBitmap(this, "monitor_upgrade_online", 5).bmp());/d' \
       src/slic3r/GUI/DeviceTab/uiDeviceUpdateVersion.cpp
+    # Project opening from the Home webview must show the Plater first: its
+    # file dialog and project-loading UI are parented to the Plater itself.
+    substituteInPlace src/slic3r/GUI/GUI_App.cpp \
+      --replace-fail '    if (project_id == "<new>")
+        plater()->new_project();
+    else if (project_id.empty())
+        plater()->load_project();' \
+                     '    if (project_id == "<new>") {
+        CallAfter([this] {
+            if (mainframe) mainframe->select_tab(MainFrame::tp3DEditor);
+            plater()->new_project();
+        });
+    } else if (project_id.empty()) {
+        CallAfter([this] {
+            if (mainframe) mainframe->select_tab(MainFrame::tp3DEditor);
+            plater()->load_project();
+        });
+    }' \
+      --replace-fail '    else
+        CallAfter([this, project_id] { mainframe->open_recent_project(-1, wxString::FromUTF8(project_id)); });' \
+                     '    else {
+        CallAfter([this, project_id] {
+            if (mainframe) mainframe->select_tab(MainFrame::tp3DEditor);
+            mainframe->open_recent_project(-1, wxString::FromUTF8(project_id));
+        });
+    }'
+    # wxGTK 3.3.4 can report this specific top-level-window assertion when a
+    # native file dialog is dragged. Keep other wx assertions visible.
+    substituteInPlace src/slic3r/GUI/GUI_App.hpp \
+      --replace-fail '    bool            OnInit() override;' \
+                     '    void            OnAssertFailure(const wxChar *file, int line, const wxChar *func, const wxChar *cond, const wxChar *msg) override;
+    bool            OnInit() override;'
+    substituteInPlace src/slic3r/GUI/GUI_App.cpp \
+      --replace-fail 'bool GUI_App::OnInit()
+{' \
+                     'void GUI_App::OnAssertFailure(const wxChar *file, int line, const wxChar *func, const wxChar *cond, const wxChar *msg)
+{
+    const wxString source(file ? file : wxS(""));
+    const wxString function(func ? func : wxS(""));
+    const wxString condition(cond ? cond : wxS(""));
+    const wxString message(msg ? msg : wxS(""));
+    if (source.EndsWith(wxS("/src/gtk/toplevel.cpp")) && line == 1568 &&
+        function == wxS("DoMoveWindow") && condition == wxS("Assert failure") &&
+        message == wxS("DoMoveWindow called for wxTopLevelWindowGTK"))
+        return;
+    wxApp::OnAssertFailure(file, line, func, cond, msg);
+}
+
+bool GUI_App::OnInit()
+{'
     # OCCT 7.9 consolidated the legacy STEP libraries into TKDESTEP, and
     # nixpkgs builds OpenCV as component libraries rather than opencv_world.
     substituteInPlace src/libslic3r/CMakeLists.txt \
@@ -430,54 +483,7 @@ stdenv.mkDerivation (finalAttrs: {
 
     # Boost 1.91 BoostConfig.cmake does not provide component config files.
     # Use FindBoost module instead.
-    cat > cmake/modules/FindBoost.cmake <<'EOF'
-    find_path(Boost_INCLUDE_DIR NAMES boost/version.hpp REQUIRED)
-    set(Boost_INCLUDE_DIRS "''${Boost_INCLUDE_DIR}")
-    file(STRINGS "''${Boost_INCLUDE_DIR}/boost/version.hpp" _boost_version_line
-      REGEX "^#define BOOST_VERSION [0-9]+$")
-    string(REGEX MATCH "[0-9]+" Boost_VERSION "''${_boost_version_line}")
-    math(EXPR _boost_major "''${Boost_VERSION} / 100000")
-    math(EXPR _boost_minor "(''${Boost_VERSION} / 100) % 1000")
-    math(EXPR _boost_patch "''${Boost_VERSION} % 100")
-    set(Boost_VERSION_STRING "''${_boost_major}.''${_boost_minor}.''${_boost_patch}")
-    if(NOT TARGET Boost::boost)
-      add_library(Boost::boost INTERFACE IMPORTED)
-      set_target_properties(Boost::boost PROPERTIES
-        INTERFACE_INCLUDE_DIRECTORIES "''${Boost_INCLUDE_DIR}")
-    endif()
-    set(_Boost_COMPONENTS ''${Boost_FIND_COMPONENTS})
-    foreach(_component IN LISTS _Boost_COMPONENTS)
-      if(_component STREQUAL "system")
-        if(NOT TARGET Boost::system)
-          add_library(Boost::system INTERFACE IMPORTED)
-          set_target_properties(Boost::system PROPERTIES
-            INTERFACE_INCLUDE_DIRECTORIES "''${Boost_INCLUDE_DIR}")
-        endif()
-        set(Boost_system_FOUND TRUE)
-        set(Boost_SYSTEM_FOUND TRUE)
-        list(APPEND Boost_LIBRARIES Boost::system)
-        continue()
-      endif()
-      find_library(Boost_''${_component}_LIBRARY
-        NAMES boost_''${_component}
-        REQUIRED)
-      if(NOT TARGET Boost::''${_component})
-        add_library(Boost::''${_component} UNKNOWN IMPORTED)
-        set_target_properties(Boost::''${_component} PROPERTIES
-          IMPORTED_LOCATION "''${Boost_''${_component}_LIBRARY}"
-          INTERFACE_INCLUDE_DIRECTORIES "''${Boost_INCLUDE_DIR}")
-      endif()
-      set(Boost_''${_component}_FOUND TRUE)
-      string(TOUPPER "''${_component}" _component_upper)
-      set(Boost_''${_component_upper}_FOUND TRUE)
-      list(APPEND Boost_LIBRARIES Boost::''${_component})
-    endforeach()
-    include(FindPackageHandleStandardArgs)
-    find_package_handle_standard_args(Boost
-      REQUIRED_VARS Boost_INCLUDE_DIR
-      VERSION_VAR Boost_VERSION_STRING
-      HANDLE_COMPONENTS)
-    EOF
+    cp ${./FindBoost.cmake} cmake/modules/FindBoost.cmake
     substituteInPlace CMakeLists.txt \
       --replace-fail 'find_package(Boost 1.83.0 CONFIG REQUIRED COMPONENTS' \
                      'list(PREPEND CMAKE_MODULE_PATH "''${PROJECT_SOURCE_DIR}/cmake/modules")
@@ -557,17 +563,17 @@ stdenv.mkDerivation (finalAttrs: {
     install -Dm644 "$out/resources/images/AnycubicSlicer.png" \
       "$out/share/icons/hicolor/256x256/apps/AnycubicSlicer.png"
     install -Dm644 /dev/null "$out/share/applications/anycubic-slicer-next.desktop"
-    cat > "$out/share/applications/anycubic-slicer-next.desktop" <<EOF
-    [Desktop Entry]
-    Type=Application
-    Name=AnycubicSlicerNext
-    Comment=Anycubic 3D printer slicer
-    Exec=$out/bin/AnycubicSlicerNext %F
-    Icon=$out/resources/images/AnycubicSlicer.png
-    Terminal=false
-    Categories=Graphics;3DGraphics;
-    StartupWMClass=AnycubicSlicerNext
-    EOF
+    printf '%s\n' \
+      '[Desktop Entry]' \
+      'Type=Application' \
+      'Name=AnycubicSlicerNext' \
+      'Comment=Anycubic 3D printer slicer' \
+      "Exec=$out/bin/AnycubicSlicerNext %F" \
+      "Icon=$out/resources/images/AnycubicSlicer.png" \
+      'Terminal=false' \
+      'Categories=Graphics;3DGraphics;' \
+      'StartupWMClass=AnycubicSlicerNext' \
+      > "$out/share/applications/anycubic-slicer-next.desktop"
     rm -f "$out/resources/applications/OrcaSlicer.desktop"
   '';
 
