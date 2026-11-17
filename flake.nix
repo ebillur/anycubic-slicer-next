@@ -16,8 +16,22 @@
         src = pkgs.fetchFromGitHub {
           owner = "ANYCUBIC-3D";
           repo = "AnycubicSlicerNext";
-          rev = "6103ed8b511609658d00d0538cc7f0609cdb57da";
-          hash = "sha256-0kXjIoinNvpkHZ54qlTkQtk9DmMMJ27nr+nCjHKH7uk=";
+          # Track the AnycubicSlicerNext develop branch (pinned for reproducibility).
+          rev = "987a3c2bf9ed13934137326bfd522896c70e5101";
+          hash = "sha256-CWGP+qnwrquVW75uCmXfBMh3QPhfa2sSpZbxuG/5P94=";
+        };
+        openPluginsSrc = pkgs.fetchFromGitHub {
+          owner = "ANYCUBIC-3D";
+          repo = "open-plugins";
+          # Pin the SDK's develop branch for reproducible builds.
+          rev = "e3bdacc1a11bf925760abcc8b022005780363db6";
+          hash = "sha256-jxtzrDEDY8o9lXGHef3IY0r52VDhMPXX7Wlw13JeWM0=";
+        };
+        wxwidgetsSrc = pkgs.fetchgit {
+          url = "https://github.com/wxWidgets/wxWidgets.git";
+          rev = "refs/tags/v3.3.4";
+          hash = "sha256-J04XE/62Ih+ZnYkl3cMEAAKRnFhPmOynMbZUbozk/gY=";
+          fetchSubmodules = true;
         };
         libnoiseSrc = pkgs.fetchzip {
           url = "https://github.com/SoftFever/Orca-deps-libnoise/archive/refs/tags/1.0.zip";
